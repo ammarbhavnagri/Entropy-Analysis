@@ -77,6 +77,7 @@ The R Markdown file that documents and implements the entropy workflow.
 `languageEntropy-1.0.1c`
 The folder that houses the languageEntropy R package in case there are issues calling it from within the .Rmd
 
+
 Please keep all **new CSV outputs** and any **updated scripts** in this same `Entropy analysis` folder to maintain a clean, versioned workflow for the lab.
 
 ---

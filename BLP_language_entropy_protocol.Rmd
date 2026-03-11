@@ -1,0 +1,300 @@
+---
+title: "Computing Language Entropy from BLP Data"
+author: "MultiPhonLab (generated using Julius 1.0 Max)"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Global chunk options
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+```
+
+## 1. What is language entropy and why are we using it?
+
+This protocol walks through computing **language entropy** from Bilingual Language Profile (BLP)
+data using R and the `languageEntropy` package (Gullifer; https://github.com/jasongullifer/languageEntropy).
+
+It assumes general programming knowledge but not prior R experience.
+Every code chunk is commented to explain what the code does and why.
+
+### 1.1 Conceptual background
+
+**Language entropy** captures how *balanced* or *diversified* a person's language use is
+in a given context (e.g., with friends, at home, at school/work).
+
+- A person who uses **only one language** in a context has **low entropy** (approaching 0).
+- A person who uses **multiple languages equally** has **high entropy**.
+
+Formally, given proportions $p_1, p_2, \dots, p_n$ for $n$ languages in a context,
+Shannon entropy is:
+
+$$H = -\sum_{i=1}^{n} p_i \log(p_i)$$
+
+The `languageEntropy` package computes this for you.
+
+### 1.2 Why the BLP works for this
+
+The BLP (Birdsong, Gertken, & Amengual, 2012) includes items like:
+
+> "In an average week, what percentage of the time do you use ENGLISH with friends?"
+> "In an average week, what percentage of the time do you use SPANISH with friends?"
+> "In an average week, what percentage of the time do you use OTHER LANGUAGES with friends?"
+
+Similar items exist for **family** and **school/work**.
+
+These percentage-of-time responses are exactly what entropy needs:
+convert them to proportions (divide by 100), then pass them to `languageEntropy`.
+
+We use **three contexts**:
+
+| Context     | Languages covered         |
+|-------------|---------------------------|
+| Friends     | English, Spanish, Other   |
+| Family      | English, Spanish, Other   |
+| School/work | English, Spanish, Other   |
+
+---
+
+## 2. Set up the R environment
+
+### 2.1 Install packages (run once, then comment this chunk out)
+
+```{r install-packages, eval=FALSE}
+# tidyverse: data wrangling and visualization (dplyr, tidyr, ggplot2, etc.)
+# readxl:    read Excel (.xlsx) files into R
+# remotes:   install R packages directly from GitHub
+install.packages(c("tidyverse", "readxl", "remotes"))
+
+# languageEntropy is not on CRAN; install from GitHub. 
+#remotes::install_github("jasongullifer/languageEntropy")
+```
+
+### 2.2 Load packages
+
+```{r load-packages}
+# Load all packages needed for this analysis
+library(tidyverse)        # data wrangling: dplyr, tidyr, ggplot2
+library(readxl)           # reading .xlsx files
+library(languageEntropy)  # computing language entropy
+```
+
+---
+
+## 3. Load the BLP data
+
+The BLP Excel file has multiple sheets. Participant responses are in the sheet
+called **"Responses"**. We read that sheet directly.
+
+```{r load-data}
+# Set the path to your BLP Excel file.
+# If the file is in the same folder as this .Rmd, just use the filename.
+blp_file <- "BLP data - PROJECT Heritage phonology and syntax.xlsx"
+
+# Read the Responses sheet
+blp_raw <- read_excel(blp_file, sheet = "Responses")
+
+# Quick check: how many participants (rows) and items (columns)?
+cat("Rows (participants):", nrow(blp_raw), "
+")
+cat("Columns (items):", ncol(blp_raw), "
+")
+
+# Preview the first few rows and first 8 columns
+blp_raw[1:5, 1:8]
+```
+
+---
+
+## 4. Select and rename the relevant BLP columns
+
+We only need the **language-use-in-context** items for entropy.
+Demographics, proficiency ratings, and attitude items are not used here.
+
+| Original column (abbreviated)                | Short name          |
+|----------------------------------------------|---------------------|
+| ...ENGLISH with friends?                     | friends_english     |
+| ...SPANISH with friends?                     | friends_spanish     |
+| ...OTHER LANGUAGES with friends?             | friends_other       |
+| ...ENGLISH with family?                      | family_english      |
+| ...SPANISH with family?                      | family_spanish      |
+| ...OTHER LANGUAGES with family?              | family_other        |
+| ...ENGLISH at school/work?                   | schoolwork_english  |
+| ...SPANISH at school/work?                   | schoolwork_spanish  |
+| ...OTHER LANGUAGES at school/work?           | schoolwork_other    |
+
+```{r select-rename}
+# Trim any leading/trailing whitespace from column names
+colnames(blp_raw) <- trimws(colnames(blp_raw))
+
+# Create a numeric participant ID (row number) and select the 9 usage columns
+blp_use <- blp_raw %>%
+  mutate(id = row_number()) %>%
+  select(
+    id,
+    friends_english    = contains("ENGLISH with friends"),
+    friends_spanish    = contains("SPANISH with friends"),
+    friends_other      = contains("OTHER LANGUAGES with friends"),
+    family_english     = contains("ENGLISH with family"),
+    family_spanish     = contains("SPANISH with family"),
+    family_other       = contains("OTHER LANGUAGES with family"),
+    schoolwork_english = contains("ENGLISH at school/work"),
+    schoolwork_spanish = contains("SPANISH at school/work"),
+    schoolwork_other   = contains("OTHER LANGUAGES at school/work")
+  )%>%
+# Extract the pure number, ignoring %, +, letters, etc.
+  mutate(across(-id, ~ parse_number(as.character(.))))
+
+head(blp_use)
+```
+
+---
+
+## 5. Check that percentages sum to ~100 per context
+
+Before computing entropy, verify that each participant's percentages sum to
+approximately 100 within each context. Small rounding errors (e.g., 99 or 101)
+are fine; large discrepancies indicate a data entry problem on the part of the participant (the BLP Google form does not force the percentages to reach 100 for each context).
+
+```{r check-sums}
+# Compute row sums for each context
+blp_use <- blp_use %>%
+  mutate(
+    sum_friends    = friends_english    + friends_spanish    + friends_other,
+    sum_family     = family_english     + family_spanish     + family_other,
+    sum_schoolwork = schoolwork_english + schoolwork_spanish + schoolwork_other
+  )
+
+# Flag any rows where a context sum is lesser or greater than 100. If there are any, you will need to normalize the proportions once they are calculated from the percentages. This is done is ##7. 
+problem_rows <- blp_use %>%
+  filter(
+    !between(sum_friends,    100, 100) |
+    !between(sum_family,     100, 100) |
+    !between(sum_schoolwork, 100, 100)
+  )
+
+if (nrow(problem_rows) == 0) {
+  cat("All context percentages sum to approximately 100. No issues found.
+")
+} else {
+  cat("WARNING: The following participants have context sums outside 100:
+")
+  print(problem_rows %>% select(id, sum_friends, sum_family, sum_schoolwork))
+}
+
+```
+
+---
+
+## 6. Convert percentages to proportions
+
+Entropy requires proportions (0 to 1), not percentages (0 to 100).
+
+```{r convert-proportions}
+# Drop the sum-check columns, then divide all usage columns by 100
+blp_props <- blp_use %>%
+  select(-starts_with("sum_")) %>%
+  mutate(
+    across(
+      .cols = -id,
+      .fns  = ~ . / 100
+    )
+  )
+
+head(blp_props)
+```
+
+---
+
+## 7. Normalize proportions that do not equal 100
+
+
+
+```{r normalize-proportions}
+
+
+---
+```
+##8. Calculate a composite entropy score
+
+
+```{r calculate-composite-entropy}
+
+
+```
+## 9. Compute language entropy
+
+Compute entropy for each context. We specify the dataset (`BLP_props_normed`), the subject ID column (`id`), and the columns that contain context-specific proportions (for example, for 'Family', you'd enter `norm_family_english`, `norm_family_spanish`, `norm_family_other`). You should also supply the `contextName` arguments, which allows `languageEntropy()` to give your new entropy column a name. You'll do this three times, once each for friends, school/work, and family. The BLP_props_normed data frame will then have new columns for the entropy scores for each of the three contexts. 
+
+```{r compute-entropy}
+
+#Even after normalizing the proportions, you might get a Warning message that proportions for one or more participants do not add up to 1. Resulting entropy values may be problematic. This warning may also occur if you converted percentages to proportions and the sum is very close to 1. You can ignore it! 
+
+BLP_props_normed <- languageEntropy(BLP_props_normed, id, norm_friends_english, norm_friends_spanish, norm_friends_other, 
+                                 contextName = "friends")
+print(BLP_props_normed)
+
+BLP_props_normed <- languageEntropy(BLP_props_normed, id, norm_schoolwork_english, norm_schoolwork_spanish, norm_schoolwork_other, 
+                                 contextName = "school/work")
+print(BLP_props_normed)
+
+BLP_props_normed <- languageEntropy(BLP_props_normed, id, norm_family_english, norm_family_spanish, norm_family_other, 
+                                 contextName = "family")
+print(BLP_props_normed)
+
+BLP_props_normed <- languageEntropy(BLP_props_normed, id, composite_english, composite_spanish, composite_other, 
+                                 contextName = "composite")
+print(BLP_props_normed)
+```
+
+## 10. Interpret the entropy output
+
+After running `languageEntropy()` you have an entropy value for each
+participant x domain combination.
+
+- Entropy = **0**: participant uses only one language in that context.
+- Entropy = **maximum**: participant uses all languages equally.
+- **Intermediate values**: some mixing, but not perfectly balanced.
+
+For relative comparisons within your sample, higher always means more balanced use.
+
+```{r summarize-entropy}
+#Fill this in
+
+
+```
+
+---
+
+## 11. Visualize entropy by context and as a composite
+
+```{r plot-entropy, fig.width=7, fig.height=4}
+# Fill this in
+#Boxplot with individual participant points overlaid? Consider other options
+
+```
+
+
+---
+
+## 12. Save data frame
+
+```{r save}
+
+# Save the full dataset
+write.csv(BLP_props_normed, "BLP_props_and_entropy.csv", row.names = FALSE)
+
+```
+
+---
+
+## 13. Summary of steps
+
+1. Loaded BLP Excel data from the **Responses** sheet.
+2. Identified and renamed the 9 BLP items for language use in friends, family, and school/work contexts.
+3. Checked that percentages per context summed to ~100.
+4. Converted percentages to **proportions** (0-1).
+5. Normalized proportions that were not equal to 1. 
+6. Called `languageEntropy()` to compute entropy per participant per context and per composite and add new columns to data frame with entropy scores. 
+7. Summarized and visualized entropy distributions.
+8. Saved output file.
