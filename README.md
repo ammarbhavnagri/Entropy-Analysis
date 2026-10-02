@@ -1,4 +1,4 @@
-# Heritage Phonology and Syntax: Entropy Analysis
+# Language Entropy
 
 This folder contains materials for the **entropy analysis** component of the **Heritage Phonology and Syntax** project (Jazmin’s Honors Capstone). The goal is to compute **language entropy** from our **Bilingual Language Profile (BLP)** language background questionnaire data.
 
